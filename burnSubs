@@ -5,13 +5,16 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.9.2
+# version 0.10.0
 #################3
 # Wishlist:
 #   queue encodes
 #   finish TODOs
 #	finish help flag
 #	audio recode flag
+#
+# Changes
+#   automatically select JPN audio if more than one audio channel found.
 ################################################################################
 
 function machineSetup() {
@@ -281,6 +284,7 @@ function parseStreams() {
 	# 
 	STREAMS_ALL="${TMP}/streams.json"
 	export STREAMS_SUB="${TMP}/subs.json"
+	export STREAMS_AUDIO="${TMP}/audio.json"
 	"$FFPROBE" -v error -of json -show_streams "${INPUT_VIDEO}" 2>/dev/null > "${STREAMS_ALL}"
 	
 	# Extract subtitles
@@ -288,6 +292,10 @@ function parseStreams() {
 	# shellcheck disable=SC2016
 	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_name == "ass") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_SUB}"
 	export SUB_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
+	# shellcheck disable=SC2016
+	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_type == "audio") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_AUDIO}"
+	export AUDIO_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
+	
 	
 }
 
@@ -340,6 +348,24 @@ function selectSubs() {
 		SUBTITLE_NAME=$($JQ '.['$SUBTITLE_ARRAY_INDEX'].t' "$STREAMS_SUB")
 		echo "   > subtitles: [${SUBTITLE_INDEX}] ${SUBTITLE_NAME}"
 	fi
+	
+	if [[ $AUDIO_COUNT -gt 1 ]]; then
+		LANG_TEST=$($JQ '[.[].lang] | index("jpn")' "$STREAMS_AUDIO")
+		echo "   > WARNING: Multiple audio streams!"
+		printf "       Using default selection rules... "
+		if [[ "$LANG_TEST" == "null" ]]; then
+			echo "Japanese audio not found!"
+			echo "    ==> Reverting to first subtitle file."
+			export AUDIO_INDEX=$($JQ '.[0].i' "$STREAMS_AUDIO")
+		else
+			# we found english
+			echo "Japanese audio found"
+			export AUDIO_INDEX=$($JQ '.['$LANG_TEST'].i' "$STREAMS_AUDIO")
+		fi
+		export FF_AUDIO="-map 0:$AUDIO_INDEX -map 0:v:0"
+	else
+		export FF_AUDIO=""
+	fi
 }
 
 
@@ -362,7 +388,7 @@ function doTranscode() {
 	# shellcheck disable=SC2086
 	echo "$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
 		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
-		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT}	\
+		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
 		"${OUTPUT_VIDEO}"
 	if [[ "$OPTS_DRYRUN" == true ]]; then
 		return
@@ -370,7 +396,7 @@ function doTranscode() {
 	# shellcheck disable=SC2086
 	"$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
 		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
-		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT}	\
+		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
 		"${OUTPUT_VIDEO}"
 	export FINAL_STATUS=$?
 }
@@ -426,6 +452,7 @@ OPTS_DRYRUN=false
 OPTS_DEBUG=false
 OPTS_LPF_AUDIO=false
 OPTS_TRANS_AUDIO=false
+OPTS_derived_NO_OUTPUT=false
 unset OPT_CRF
 # this is the --icon flag passed to notify-send at the end of the transcode
 NOTIFY_ICON="face-tired"
@@ -465,6 +492,7 @@ while true; do
 		;;
 		"-l")
 			OPTS_LISTSUBS=true
+			OPTS_derived_NO_OUTPUT=true
 			echo ">> !! list subtitles and exit"
 			shift
 			continue
@@ -591,6 +619,7 @@ if [[ "$OPTS_LISTSUBS" == "true" ]]; then
 	exit	
 fi
 # ask the user for the subtitle file if more than one is available
+# Also selects audio stream.
 selectSubs
 # extract the selected subtitle file
 extractSubs $SUBTITLE_INDEX
