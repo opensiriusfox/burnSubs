@@ -1,0 +1,553 @@
+#!/bin/bash
+set -e
+set -o nounset
+set -o errexit
+
+################################################################################
+# burnSubs
+# version 0.9.1
+#################3
+# Wishlist:
+#   queue encodes
+#   finish TODOs
+#	list subtitles flag
+#	finish help flag
+#	audio recode flag
+################################################################################
+
+function machineSetup() {
+	# Default setup
+	export FF_ENC="libx264"
+	export FF_HW=""
+	export FILT_PFX=""
+	export FILT_SFX=""
+	CRF=${OPTS_CRF:-23}
+	export FF_STD="-preset myTranscoderPreset -crf $CRF -tune animation \
+		-preset medium -movflags +faststart"
+	export FF_EXT="-profile:v high -level 4.0"
+	# Handle the time limit argument used for testing if it was passed
+	if [[ "${OPTS_TIMELIMIT}" != "null" ]]; then
+		export LIM_TIME="-t ${OPTS_TIMELIMIT}"
+	else
+		export LIM_TIME=""
+	fi
+
+	# The default extraProc function. This should be overridden by each encoder
+	# as required. For example, to set bitrate after a video has been parsed.
+	function extraProc() {
+		return
+	}
+
+	# Use the machine hostname to set the default encoding options based upon
+	# my preferences.
+	echo "Machine identification:"
+	if [[ "${OPTS_FORCESOFT}" == "true" ]]; then
+		echo "   > Hostname: $(hostname)"
+		export OPTS_ENC="allsoft"
+	else
+		if [[ "$(hostname)" == "Kusanagi" ]]; then
+			echo "   > Hostname: 草薙素子"
+			export OPTS_ENC="nvidia"
+			echo "FIX FFMPEG!"
+			#export FFMPEG="/opt/ffmpeg-nvenc/bin/ffmpeg"
+			export LD_LIBRARY_PATH="/opt/ffmpeg-nvenc/lib"
+			export FF_EXT="${FF_EXT} -pix_fmt yuv420p"
+		elif [[ "$(hostname)" == "grad-heo-lappy" ]]; then
+			echo "   > Hostname: $(hostname)"
+			export OPTS_ENC="vaapi"
+		else
+			echo "   > Hostname: $(hostname)"
+			export OPTS_ENC="allsoft"
+			export FF_EXT="${FF_EXT} -pix_fmt yuv420p"
+		fi
+	fi
+	
+	# Configure audio filtergraph if needed.
+	if [[ "${OPTS_TRANS_AUDIO}" == true ]]; then
+		FILT_AUDIO="-c:a aac"
+		if [[ "${OPTS_LPF_AUDIO}" == true ]]; then
+			FILT_AUDIO="-filter:a highpass=f=7 ${FILT_AUDIO}"
+		fi
+
+		if [[ "$(hostname)" == "Ram-the-Red" ]]; then
+			FILT_AUDIO="${FILT_AUDIO} -strict -2"
+		fi
+	else
+		FILT_AUDIO="-c:a copy"
+	fi
+
+	# Configure the encoder based upon the specific encoder chain required
+	## NVIDIA GPU Encode/Decode
+	if [[ "$OPTS_ENC" == "nvidia" ]]; then
+		echo "   > Using nVidia Encoder"
+		echo "   >>> full hardware"
+		# NVIDIA GPU encoding options
+		export FF_ENC="h264_nvenc"
+		# Assuming h264 input video
+		# TODO: Handle non h264 input streams
+		#export FF_HW="-hwaccel cuvid -c:v h264_cuvid"
+		#export FF_HW="-hwaccel cuvid"
+		# Frame count lookahead
+		export FF_EXT="${FF_EXT} -rc-lookahead 30"
+
+	## Intel CPU Encode/Decode
+	elif [[  "$OPTS_ENC" == "vaapi" ]]; then
+		echo "   > Using VAAPI."
+		# apt install libvdpau-va-gl1
+		#export FF_BIN="/opt/ffmpeg/bin/ffmpeg"
+
+		# Full hardware
+		if [[ "${OPTS_FORCEPARTSOFT}" == "false" ]]; then
+			echo "   >>> full hardware"
+			# Full hardware decode/encode
+			export FF_HW="-hwaccel vaapi -hwaccel_device \
+				/dev/dri/renderD128 -hwaccel_output_format vaapi"
+			export FF_ENC="h264_vaapi"
+			export FILT_PFX="scale_vaapi,hwmap=mode=read+write+direct,format=nv12,"
+			export FILT_SFX=",hwmap"
+			# Override the extra options used for this encoder
+			export FF_EXT="-profile:v 100 -level 40"
+		# Mixed software hardware
+		else
+			echo "   >>> hardware decode"
+			echo "     > software encode"
+			# software encode, hardware decode only
+			export FF_HW="-hwaccel vaapi -hwaccel_device /dev/dri/renderD128"
+		fi
+		
+		# Disable this shit
+		# set the bitrate based upon the old video size.
+		if [[ $(false) ]]; then
+			function extraProc() {
+				echo -n "   > determine video size: "
+				LEN_COMPLEX=$("$JQ" '.streams[0].tags.DURATION' \
+					"${STREAMS_ALL}" | tr -d '"')
+				LEN_SECONDS=$("$DATE" -u +'%s' -d "1970-01-01 $LEN_COMPLEX")
+				# shellcheck disable=SC2016
+				VIDEO_SIZE_KBYTES=$("$FFPROBE"  -select_streams v -show_entries \
+					packet=size -of default=nokey=1:noprint_wrappers=1 \
+					-i "${INPUT_VIDEO}" | "$AWK" '{s+=$1} END {print s/1024.0}')
+				KBITRATE=$("$PYTHON3" -c \
+					"print('%.0f' % (1.0*8.0*$VIDEO_SIZE_KBYTES/$LEN_SECONDS))")
+				export FF_EXT="-b:v ${KBITRATE}K "
+			}
+		fi
+	# Full Software encoding/decoding. No hardware assistance.
+	else
+		echo "   > Using default full software chain."
+	fi
+	sleep 1
+	echo "====> Starting <===="
+}
+
+function setupBins() {
+	# The first argument is the "default" binary name, and the second
+	# is the variable where that binary's path is stored. Using *export* to
+	# override the variable before "setupBins" is called will let you specify
+	# a specific instance of the binary to use instead.
+	setAndValidateBin "ffmpeg" "FFMPEG"
+	setAndValidateBin "ffprobe" "FFPROBE"
+	setAndValidateBin "jq" "JQ"
+	setAndValidateBin "python3" "PYTHON3"
+	setAndValidateBin "awk" "AWK"
+	setAndValidateBin "date" "DATE"
+}
+
+# Used by the above function to evaluate overrides if they are set, and
+# otherwise to simply return the existing binary as an absolute path.
+function setAndValidateBin() {
+	binaryVariable="$2"
+	# shellcheck disable=SC2086
+	eval binaryCurrentValue="\${$binaryVariable:-}"
+	if [[ "" == "$binaryCurrentValue" ]]; then
+		binaryCurrentValue="$1"
+	fi
+
+	# Try to extract the results of the current binary as an absolute path
+	binaryCurrentValue=$(readlink -f "$(which "$binaryCurrentValue")") || /bin/true
+	# And fail if we don't have it
+	if [[ ! -x "$binaryCurrentValue" ]]; then
+		echo "ERROR: Required binary '$1' not found."
+		exit
+	fi
+	
+	# shellcheck disable=SC2086
+	eval export $binaryVariable="$binaryCurrentValue"
+}
+
+# The fall back cleanup function to remove the shit in temp. Set to trap in
+# the setup temp function further on.
+function doCleanup() {
+	# On eject return to where we started, and frag the cleanup directory
+	cd "$WD"
+	if [[ "$OPTS_DEBUG" == "false" ]]; then
+		echo "=> Cleaning up."
+		rm -r "$TMP"
+	else
+		echo "tmp dir: $TMP"
+	fi
+	
+	alertUser
+}
+
+# All we do is note that we'll have to move around, and this helps us keep our
+# bearings and avoid polluting the working directory.
+function setupTemp() {
+	echo "=> Performing Setup:"
+	# The FFMPEG calls require all of the files to actually exist on disk. To
+	# accommodate this, we setup a temporary working directory to dump the files
+	# and we will remove it's contents when things are done. This provides a
+	# location for the font files to be placed, as well as a location for the
+	# raw subtitles files.
+	trap doCleanup EXIT
+
+	export WD="$PWD"
+	export TMP=$(mktemp -d /tmp/transFont.XXXX)
+}
+
+function dumpFonts() {
+	# Dumb font dump
+	cd "$FONTDIR"
+	"$FFMPEG" -dump_attachment:t "" -i "${INPUT_VIDEO}" -vn -an \
+		-f null /dev/null 2>/dev/null || /bin/true
+	cd "$WD"
+}
+
+function setupFonts() {
+	echo "   > setting up fonts..."
+	# Simply setup an encode specific font configuration setup. This will direct
+	# the system to use any font files that we have provided in $TMP/font_files
+	# then fall back to the system configuration afterwards.
+	export FONTDIR="${TMP}/font_files"
+	FC_DIR="${TMP}/fontconfig"
+	FC_FILE="${FC_DIR}/fonts.conf"
+	mkdir "${FONTDIR}"
+	mkdir "${FC_DIR}"
+	{
+		echo '<?xml version="1.0"?>';
+		echo '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">';
+		echo '<fontconfig>';
+		echo '	<dir>'"${FONTDIR}"'</dir>';
+		echo '	<include>/etc/fonts/fonts.conf</include>';
+		echo '</fontconfig>'
+	} > "${FC_FILE}"
+	# This export line presents the configuration override to FFMPEG later on.
+	export FONTCONFIG_FILE="${FC_FILE}"
+	
+	dumpFonts
+}
+
+function setupPreset() {
+	echo "   > setting up preset..."
+	# The preset system provides a way to specify specific encoding options.
+	# This can easily be removed as desired.
+	presetName="$1"
+	# And include the ffmpeg preset
+	export FFMPEG_DATADIR="${TMP}/ffmpeg"
+	FFMPEG_PRESET_FILE="${FFMPEG_DATADIR}/${FF_ENC}-${presetName}.preset"
+
+	mkdir "${FFMPEG_DATADIR}"
+	{	
+		# This preset is for the roku
+		echo 'coder=1'
+		echo 'flags=+loop'
+		echo 'cmp=+chroma'
+		echo 'partitions=+parti8x8+parti4x4+partp8x8+partb8x8'
+		echo 'me_method=umh'
+		echo 'subq=8'
+		echo 'me_range=16'
+		echo 'g=250'
+		echo 'keyint_min=25'
+		echo 'sc_threshold=40'
+		echo 'i_qfactor=0.71'
+		echo 'b_strategy=2'
+		echo 'qcomp=0.6'
+		echo 'qmin=10'
+		echo 'qmax=51'
+		echo 'qdiff=4'
+		echo 'bf=4'
+		echo 'refs=4'
+		echo 'directpred=3'
+		echo 'trellis=1'
+		echo 'flags2=+wpred+mixed_refs+dct8x8+fastpskip'
+	} > "${FFMPEG_PRESET_FILE}"
+}
+
+function parseStreams() {
+	# Most MKV files will only have a single subtitle file. In the case we have
+	# multiple subtitles we wish to handle conversion gracefully. To do so, we
+	# extract all of the track information (the first ffprobe call), then use
+	# the json parsing tool jq to extract subtitle data for styled subtitles.
+	#
+	# 
+	STREAMS_ALL="${TMP}/streams.json"
+	export STREAMS_SUB="${TMP}/subs.json"
+	"$FFPROBE" -v error -of json -show_streams "${INPUT_VIDEO}" 2>/dev/null > "${STREAMS_ALL}"
+	
+	# Extract subtitles
+	#$item.codec_type == "subtitle" \&\& 
+	# shellcheck disable=SC2016
+	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_name == "ass") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_SUB}"
+	export SUB_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
+	
+}
+
+function listSubtitles() {
+	# TODO: 
+	return
+}
+
+function selectSubs() {
+	# TODO: handle multiple subtitle files
+	# TODO: verify the the subtitle index is legal
+	if [[ $SUB_COUNT -eq 0 ]]; then
+		echo "   > ERROR: No subtitles! Todo!"
+		export SUBTITLE_INDEX=-1
+	elif [[ $SUB_COUNT -eq 1 ]]; then
+		export SUBTITLE_INDEX=$($JQ '.[].i' "$STREAMS_SUB")
+		SUBTITLE_NAME=$($JQ '.[].t' "$STREAMS_SUB")
+		echo "   > subtitles: [${SUBTITLE_INDEX}] ${SUBTITLE_NAME}"
+	else
+		echo "   > ERROR: Multiple subtitles! Todo!"
+		export SUBTITLE_INDEX=-1
+	fi
+}
+
+
+function extractSubs() {
+	echo "   > extracting subtitles"
+	export SUBTITLE_FILE="${TMP}/ripped.ass"
+	extractIndex="$1"
+	"$FFMPEG" -i "${INPUT_VIDEO}" -map 0:"${extractIndex}" -vn -an -c:s copy -c:a copy \
+		"$SUBTITLE_FILE" 2>/dev/null
+
+}
+
+function doTranscode() {
+	echo "=> Starting transcode:"
+	# shellcheck disable=SC2086
+	echo "$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
+		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
+		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT}	\
+		"${OUTPUT_VIDEO}"
+	if [[ "$OPTS_DRYRUN" == true ]]; then
+		return
+	fi
+	# shellcheck disable=SC2086
+	"$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
+		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
+		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT}	\
+		"${OUTPUT_VIDEO}"
+	export FINAL_STATUS=$?
+}
+
+function runExtraProc() {
+	if [[ "$FF_ENC" == "$1" ]]; then
+		extraProc
+	fi
+}
+
+
+function klobberCheck() {
+	if [[ -e "${OUTPUT_VIDEO}" ]]; then
+		if [[ "$OPTS_KLOBBER" == "true" ]]; then
+			echo "   > klobbering old file '${OUTPUT_VIDEO}'"
+			rm -v "${OUTPUT_VIDEO}"
+		else
+			echo "   > refusing to klobber old file '${OUTPUT_VIDEO}'"
+			exit 1
+		fi
+	fi
+}
+
+function alertUser() {
+	# if the function isn't available, then define an empty function to
+	# reject the message into the void
+	if ! which notify-send >/dev/null; then
+		function notify-send() { return; }
+	fi
+	
+	if [[ $FINAL_STATUS -ne 0 ]]; then
+		notify-send -u normal --icon error "🗙 Transcode failed!" \
+			"$(basename "${INPUT_VIDEO}")\n🞩🞩🞩🞩🞩\n$(basename "${OUTPUT_VIDEO}")"
+	else
+		notify-send -u normal --icon ${NOTIFY_ICON} "✔ Transcode finished" \
+			"$(basename "${INPUT_VIDEO}")\n↓↓↓↓↓\n$(basename "${OUTPUT_VIDEO}")"
+	fi
+}
+
+
+# And verify arguments
+######
+# Defaults
+OPTS_KLOBBER=false
+OPTS_LISTSUBS=false
+OPTS_SELSUB=-1
+OPTS_LISTSUBS=false
+OPTS_FORCESOFT=false
+OPTS_FORCEPARTSOFT=false
+OPTS_ENC="allsoft"
+OPTS_TIMELIMIT=null
+OPTS_DRYRUN=false
+OPTS_DEBUG=false
+OPTS_LPF_AUDIO=false
+OPTS_TRANS_AUDIO=false
+unset OPT_CRF
+# this is the --icon flag passed to notify-send at the end of the transcode
+NOTIFY_ICON="face-tired"
+# preinitalized final ffmpeg status to assumed error
+FINAL_STATUS=1
+
+### Argument Parsing
+#	Input/Output videos (non-flagged arguments)
+#	optional:
+#		-k		do clobber output
+#		-s #	subtitle track
+#		-l		list subtitle tracks of input files		
+#		--soft	force software encoder
+#		-d		debug, don't cleanup
+###
+
+
+######
+# Reformat and organize the input strings
+OPT_STRING=$(getopt -o 'hkls:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix' -- "$@")
+# reassign them as positional arguments
+eval set -- "$OPT_STRING"
+
+while true; do
+	case "$1" in
+		"-t")
+			OPTS_TIMELIMIT="$2"
+			echo ">> !! limiting encode to time '$OPTS_TIMELIMIT'"
+			shift 2
+			continue
+		;;
+		"-k")
+			OPTS_KLOBBER=true
+			echo ">> !! klobber when encoding time comes."
+			shift
+			continue
+		;;
+		"-l")
+			OPTS_LISTSUBS=true
+			echo ">> !! list subtitles and exit"
+			shift
+			continue
+		;;
+		"-s")
+			OPTS_SELSUB="$2"
+			#TODO: verify legal subtitle track number convention"
+			echo "TODO: verify legal subtitle track number convention" 
+			echo ">> !! Selecting subtitle track #${OPTS_SELSUB}"
+			shift 2
+			continue
+		;;
+		"--psoft")
+			OPTS_FORCEPARTSOFT=true
+			echo ">> !! forcing software encoding."
+			shift
+			continue
+		;;
+		"--audio")
+			OPTS_LPF_AUDIO=true
+			OPTS_TRANS_AUDIO=true
+			echo ">> !! low pass filter audio to AAC."
+			shift
+			continue
+		;;
+		"--audiofix")
+			OPTS_TRANS_AUDIO=true
+			echo ">> !! no filter audio to AAC."
+			shift
+			continue
+		;;
+		"--soft")
+			OPTS_FORCESOFT=true
+			echo ">> !! forcing software decoding/encoding."
+			shift
+			continue
+		;;
+		"--crf")
+			OPTS_CRF="$2"
+			echo ">> !! CRF Override CRF='$OPTS_CRF'"
+			shift 2
+			continue
+		;;
+		"-d")
+			OPTS_DEBUG=true
+			echo ">> !! debug enabled."
+			echo ">>      temp files will not be cleaned up."
+			shift
+			continue
+		;;
+		"--dry")
+			OPTS_DRYRUN=true
+			echo ">> !! dry run. No encode."
+			shift
+			continue
+		;;
+		"--")
+			shift # all arguments parsed
+			break
+		;;
+		"-h" | "--help")
+			# TODO: Display help
+			shift # all arguments parsed
+			echo "TODO: HELP!" # Display HELP
+			exit
+		;;
+		*)
+			echo "Arg: $1"
+			echo "Internal Error!" >&2
+			exit
+		;;
+	esac
+done
+
+# Now parse POSITIONAL ARGUMENTS
+if [[ $# -ne 2 ]]; then
+	echo "ERROR: Incorrect number of positional arguments. Expected 2, got $#"
+	echo "       $0 [args] <input> <output>"
+	exit
+else
+	INPUT_VIDEO="$(readlink -f "$1")"
+	OUTPUT_VIDEO="$2"
+fi
+
+###############
+# Configure the encoder based upon the hostname
+machineSetup
+
+###############
+# Check and validate the binaries we use to parse and setup the encoding chain
+setupBins
+# Setup the temp space for working files
+setupTemp
+# Extract embedded fonts and configure fontconfig
+setupFonts
+# Export the preset file used for the Roku
+setupPreset myTranscoderPreset
+
+###############
+# Parse stream data to identify subtitles
+parseStreams
+# Now! If OPTS_LISTSUBS is defined, then we branch to list subs and exit.
+if [[ "$OPTS_LISTSUBS" == "true" ]]; then
+	listSubtitles
+	exit	
+fi
+# ask the user for the subtitle file if more than one is available
+selectSubs
+# extract the selected subtitle file
+extractSubs $SUBTITLE_INDEX
+# Set the bitrate if that function wasn't disabled
+runExtraProc "h264_vaapi"
+
+# If we're clobbering, now is the time to do the clobbering
+klobberCheck
+# Kickoff the transcode
+doTranscode
+
+# cleanup automatically executes after the done message is cleared
+echo "done."
