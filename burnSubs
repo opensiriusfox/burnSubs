@@ -294,7 +294,7 @@ function parseStreams() {
 	export SUB_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
 	# shellcheck disable=SC2016
 	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_type == "audio") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_AUDIO}"
-	export AUDIO_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
+	export AUDIO_COUNT=$("$JQ" 'length' "${STREAMS_AUDIO}")
 	
 	
 }
@@ -306,9 +306,25 @@ function listSubtitles() {
 	printf "Num: %4s %s\n" "LANG" "Subtitle Title String"
 	echo "---------------------------------"
 	for iSUB in $(seq 0 $(($SUB_COUNT-1))); do
-		X_TITLE=$($JQ '.['$iSUB'].t' $STREAMS_SUB)
-		X_INDEX=$($JQ '.['$iSUB'].i' $STREAMS_SUB)
+		X_TITLE=$($JQ '.['$iSUB'].t' $STREAMS_SUB | tr -d '"')
+		X_INDEX=$($JQ '.['$iSUB'].i' $STREAMS_SUB | tr -d '"')
 		X_LANG=$($JQ '.['$iSUB'].lang' $STREAMS_SUB)
+		printf " %2d: %4s %s\n" $X_INDEX $X_LANG "$X_TITLE" 
+	done
+	echo ""
+	return
+}
+
+function listAudioTracks() {
+	# TODO: 
+	echo ""
+	echo "available audio tracks:"
+	printf "Num: %4s %s\n" "LANG" "Title String"
+	echo "---------------------------------"
+	for iAUDIO in $(seq 0 $(($AUDIO_COUNT-1))); do
+		X_TITLE=$($JQ '.['$iAUDIO'].t' $STREAMS_AUDIO | tr -d '"')
+		X_INDEX=$($JQ '.['$iAUDIO'].i' $STREAMS_AUDIO | tr -d '"')
+		X_LANG=$($JQ '.['$iAUDIO'].lang' $STREAMS_AUDIO)
 		printf " %2d: %4s %s\n" $X_INDEX $X_LANG "$X_TITLE" 
 	done
 	echo ""
@@ -350,17 +366,21 @@ function selectSubs() {
 	fi
 	
 	if [[ $AUDIO_COUNT -gt 1 ]]; then
-		LANG_TEST=$($JQ '[.[].lang] | index("jpn")' "$STREAMS_AUDIO")
-		echo "   > WARNING: Multiple audio streams!"
-		printf "       Using default selection rules... "
-		if [[ "$LANG_TEST" == "null" ]]; then
-			echo "Japanese audio not found!"
-			echo "    ==> Reverting to first subtitle file."
-			export AUDIO_INDEX=$($JQ '.[0].i' "$STREAMS_AUDIO")
+		if [[ $OPTS_SELAUDIO -lt 0 ]]; then
+			LANG_TEST=$($JQ '[.[].lang] | index("jpn")' "$STREAMS_AUDIO")
+			echo "   > WARNING: Multiple audio streams!"
+			printf "       Using default selection rules... "
+			if [[ "$LANG_TEST" == "null" ]]; then
+				echo "Japanese audio not found!"
+				echo "    ==> Reverting to first subtitle file."
+				export AUDIO_INDEX=$($JQ '.[0].i' "$STREAMS_AUDIO")
+			else
+				# we found english
+				echo "Japanese audio found"
+				export AUDIO_INDEX=$($JQ '.['$LANG_TEST'].i' "$STREAMS_AUDIO")
+			fi
 		else
-			# we found english
-			echo "Japanese audio found"
-			export AUDIO_INDEX=$($JQ '.['$LANG_TEST'].i' "$STREAMS_AUDIO")
+			AUDIO_INDEX=$OPTS_SELAUDIO
 		fi
 		export FF_AUDIO="-map 0:$AUDIO_INDEX -map 0:v:0"
 	else
@@ -443,6 +463,7 @@ function alertUser() {
 OPTS_KLOBBER=false
 OPTS_LISTSUBS=false
 OPTS_SELSUB=-1
+OPTS_SELAUDIO=-1
 OPTS_LISTSUBS=false
 OPTS_FORCESOFT=false
 OPTS_FORCEPARTSOFT=false
@@ -505,13 +526,21 @@ while true; do
 			shift 2
 			continue
 		;;
+		"-a")
+			OPTS_SELAUDIO="$2"
+			#TODO: verify legal subtitle track number convention"
+			echo "TODO: verify legal audio track number convention" 
+			echo ">> !! Selecting audio track #${OPTS_SELAUDIO}"
+			shift 2
+			continue
+		;;
 		"--psoft")
 			OPTS_FORCEPARTSOFT=true
 			echo ">> !! forcing software encoding."
 			shift
 			continue
 		;;
-		"--audio")
+		"--lpf")
 			OPTS_LPF_AUDIO=true
 			OPTS_TRANS_AUDIO=true
 			echo ">> !! low pass filter audio to AAC."
@@ -567,10 +596,12 @@ while true; do
     --soft      force software decode and encode
     --psoft     use software encoding (allow hardware decode when available)
     --audiofix  transcode audio
-    --audio     transcode audio, and low-pass filter as well
+    --lpf     transcode audio, and low-pass filter as well
 
-    -l          list subtitles (no encoding)
+    -l          list subtitles and audio tracks (no encoding)
     -s <#>      select specific subtitle track number
+                #TODO: verify legal subtitle track number convention
+    -a <#>      select specific subtitle track number
                 #TODO: verify legal subtitle track number convention
 
     -d          debug (no cleanup)
@@ -587,13 +618,17 @@ _EOT
 done
 
 # Now parse POSITIONAL ARGUMENTS
-if [[ $# -ne 2 ]]; then
+if [[ $# -eq 2 || $OPTS_derived_NO_OUTPUT == true ]]; then
+	INPUT_VIDEO="$(readlink -f "$1")"
+	if [[ $# -eq 2 ]]; then
+		OUTPUT_VIDEO="$2"
+	else
+		OUTPUT_VIDEO="/dev/null"
+	fi
+else
 	echo "ERROR: Incorrect number of positional arguments. Expected 2, got $#"
 	echo "       $(basename $0) [args] <input> <output>"
 	exit
-else
-	INPUT_VIDEO="$(readlink -f "$1")"
-	OUTPUT_VIDEO="$2"
 fi
 
 ###############
@@ -616,6 +651,7 @@ parseStreams
 # Now! If OPTS_LISTSUBS is defined, then we branch to list subs and exit.
 if [[ "$OPTS_LISTSUBS" == "true" ]]; then
 	listSubtitles
+	listAudioTracks
 	exit	
 fi
 # ask the user for the subtitle file if more than one is available
