@@ -294,6 +294,17 @@ function parseStreams() {
 
 function listSubtitles() {
 	# TODO: 
+	echo ""
+	echo "available subtitles:"
+	printf "Num: %4s %s\n" "LANG" "Subtitle Title String"
+	echo "---------------------------------"
+	for iSUB in $(seq 0 $(($SUB_COUNT-1))); do
+		X_TITLE=$($JQ '.['$iSUB'].t' $STREAMS_SUB)
+		X_INDEX=$($JQ '.['$iSUB'].i' $STREAMS_SUB)
+		X_LANG=$($JQ '.['$iSUB'].lang' $STREAMS_SUB)
+		printf " %2d: %4s %s\n" $X_INDEX $X_LANG "$X_TITLE" 
+	done
+	echo ""
 	return
 }
 
@@ -303,13 +314,30 @@ function selectSubs() {
 	if [[ $SUB_COUNT -eq 0 ]]; then
 		echo "   > ERROR: No subtitles! Todo!"
 		export SUBTITLE_INDEX=-1
-	elif [[ $SUB_COUNT -eq 1 ]]; then
-		export SUBTITLE_INDEX=$($JQ '.[].i' "$STREAMS_SUB")
-		SUBTITLE_NAME=$($JQ '.[].t' "$STREAMS_SUB")
-		echo "   > subtitles: [${SUBTITLE_INDEX}] ${SUBTITLE_NAME}"
 	else
-		echo "   > ERROR: Multiple subtitles! Todo!"
-		export SUBTITLE_INDEX=-1
+		if [[ $OPTS_SELSUB -lt 0 && $SUB_COUNT -gt 1 ]]; then
+			LANG_TEST=$($JQ '[.[].lang] | index("eng")' "$STREAMS_SUB")
+			echo "   > WARNING: Multiple subtitles!"
+			printf "       Using default selection rules... "
+			if [[ "$LANG_TEST" == "null" ]]; then
+				echo "English not found!"
+				echo "    ==> Reverting to first subtitle file."
+				export SUBTITLE_INDEX=$($JQ '.[0].i' "$STREAMS_SUB")
+			else
+				# we found english
+				echo "English found"
+				export SUBTITLE_INDEX=$($JQ '.['$LANG_TEST'].i' "$STREAMS_SUB")
+			fi
+		else
+			if [[ $SUB_COUNT -eq 1 ]]; then
+				export SUBTITLE_INDEX=$($JQ '.[].i' "$STREAMS_SUB")
+			else
+				export SUBTITLE_INDEX=$OPTS_SELSUB
+			fi
+		fi
+		SUBTITLE_ARRAY_INDEX=$($JQ '[.[].i] | index('$SUBTITLE_INDEX')' "$STREAMS_SUB")
+		SUBTITLE_NAME=$($JQ '.['$SUBTITLE_ARRAY_INDEX'].t' "$STREAMS_SUB")
+		echo "   > subtitles: [${SUBTITLE_INDEX}] ${SUBTITLE_NAME}"
 	fi
 }
 
