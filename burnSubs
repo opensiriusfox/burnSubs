@@ -211,7 +211,7 @@ function dumpFonts() {
 	# Dumb font dump
 	cd "$FONTDIR"
 	"$FFMPEG" -dump_attachment:t "" -i "${INPUT_VIDEO}" -vn -an \
-		-f null /dev/null 2>/dev/null || /bin/true
+		-f null -y /dev/null 2>/dev/null || /bin/true
 	cd "$WD"
 }
 
