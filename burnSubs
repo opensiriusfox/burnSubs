@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.10.4
+# version 0.11.0
 #################3
 # Wishlist:
 #   queue encodes
@@ -23,6 +23,7 @@ function machineSetup() {
 	export FF_HW=""
 	export FILT_PFX=""
 	export FILT_SFX=""
+	
 	CRF=${OPTS_CRF:-23}
 	export FF_STD="-preset myTranscoderPreset -crf $CRF -tune animation \
 		-preset medium -movflags +faststart"
@@ -341,7 +342,8 @@ function selectSubs() {
 		export SUBTITLE_INDEX=-1
 	else
 		if [[ $OPTS_SELSUB -lt 0 && $SUB_COUNT -gt 1 ]]; then
-			LANG_TEST=$($JQ '[.[].lang] | index("eng")' "$STREAMS_SUB")
+			OPTS_SELSUB_LANG="${OPTS_SELSUB_LANG:-eng}"
+			LANG_TEST=$($JQ '[.[].lang] | index("'${OPTS_SELSUB_LANG}'")' "$STREAMS_SUB")
 			echo "   > WARNING: Multiple subtitles!"
 			printf "       Using default selection rules... "
 			if [[ "$LANG_TEST" == "null" ]]; then
@@ -367,7 +369,8 @@ function selectSubs() {
 	
 	if [[ $AUDIO_COUNT -gt 1 ]]; then
 		if [[ $OPTS_SELAUDIO -lt 0 ]]; then
-			LANG_TEST=$($JQ '[.[].lang] | index("jpn")' "$STREAMS_AUDIO")
+			OPTS_SELAUDIO_LANG="${OPTS_SELAUDIO_LANG:-jpn}"
+			LANG_TEST=$($JQ '[.[].lang] | index("'${OPTS_SELAUDIO_LANG}'")' "$STREAMS_AUDIO")
 			echo "   > WARNING: Multiple audio streams!"
 			printf "       Using default selection rules... "
 			if [[ "$LANG_TEST" == "null" ]]; then
@@ -493,7 +496,7 @@ FINAL_STATUS=1
 
 ######
 # Reformat and organize the input strings
-OPT_STRING=$(getopt -o 'hkls:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix' -- "$@")
+OPT_STRING=$(getopt -o 'hkls:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:' -- "$@")
 # reassign them as positional arguments
 eval set -- "$OPT_STRING"
 
@@ -526,11 +529,27 @@ while true; do
 			shift 2
 			continue
 		;;
+		"--slocale")
+			OPTS_SELSUB_LANG="$2"
+			#TODO: verify legal subtitle track number convention"
+			echo "TODO: verify legal subtitle track number convention" 
+			echo ">> !! Selecting subtitle track #${OPTS_SELSUB_LANG}"
+			shift 2
+			continue
+		;;
 		"-a")
 			OPTS_SELAUDIO="$2"
 			#TODO: verify legal subtitle track number convention"
 			echo "TODO: verify legal audio track number convention" 
 			echo ">> !! Selecting audio track #${OPTS_SELAUDIO}"
+			shift 2
+			continue
+		;;
+		"--alocale")
+			OPTS_SELAUDIO_LANG="$2"
+			#TODO: verify legal subtitle track number convention"
+			echo "TODO: verify legal audio track number convention" 
+			echo ">> !! Selecting audio track with locale #${OPTS_SELAUDIO_LANG}"
 			shift 2
 			continue
 		;;
@@ -601,8 +620,12 @@ while true; do
     -l          list subtitles and audio tracks (no encoding)
     -s <#>      select specific subtitle track number
                 #TODO: verify legal subtitle track number convention
-    -a <#>      select specific subtitle track number
-                #TODO: verify legal subtitle track number convention
+    -a <#>      select specific audio track number
+                #TODO: verify legal audio track number convention
+    --slocale 'eng'     select specific subtitle track number
+                        #TODO: verify legal subtitle track number convention
+    --alocale 'jpn'     select specific audio track number
+                        #TODO: verify legal audio track number convention
 
     -d          debug (no cleanup)
     --dry       dry run (no encoding)
