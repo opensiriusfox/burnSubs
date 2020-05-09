@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.11.0
+# version 0.11.1
 #################3
 # Wishlist:
 #   queue encodes
@@ -291,7 +291,7 @@ function parseStreams() {
 	# Extract subtitles
 	#$item.codec_type == "subtitle" \&\& 
 	# shellcheck disable=SC2016
-	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_name == "ass") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_SUB}"
+	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_name == "ass" or $item.codec_name == "dvd_subtitle") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition, codec:($item.codec_name)}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition,codec:$item.codec}])' "${STREAMS_ALL}" > "${STREAMS_SUB}"
 	export SUB_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
 	# shellcheck disable=SC2016
 	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_type == "audio") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_AUDIO}"
@@ -310,7 +310,11 @@ function listSubtitles() {
 		X_TITLE=$($JQ '.['$iSUB'].t' $STREAMS_SUB | tr -d '"')
 		X_INDEX=$($JQ '.['$iSUB'].i' $STREAMS_SUB | tr -d '"')
 		X_LANG=$($JQ '.['$iSUB'].lang' $STREAMS_SUB)
+		X_CODEC=$($JQ '.['$iSUB'].codec' $STREAMS_SUB)
 		printf " %2d: %4s %s\n" $X_INDEX $X_LANG "$X_TITLE" 
+		if [[ "$X_CODEC" != "ass" ]]; then
+			printf "      format: %s\n" $X_CODEC
+		fi
 	done
 	echo ""
 	return
@@ -496,7 +500,7 @@ FINAL_STATUS=1
 
 ######
 # Reformat and organize the input strings
-OPT_STRING=$(getopt -o 'hkls:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:' -- "$@")
+OPT_STRING=$(getopt -o 'hkls:a:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:' -- "$@")
 # reassign them as positional arguments
 eval set -- "$OPT_STRING"
 
