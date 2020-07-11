@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.11.2
+# version 0.11.3
 #################
 # Wishlist:
 #   queue encodes
@@ -17,6 +17,8 @@ set -o errexit
 #   automatically select JPN audio if more than one audio channel found.
 ################################################################################
 
+DEFAULTS_OPTS_CRF=20
+
 function machineSetup() {
 	# Default setup
 	export FF_ENC="libx264"
@@ -24,7 +26,7 @@ function machineSetup() {
 	export FILT_PFX=""
 	export FILT_SFX=""
 	
-	CRF=${OPTS_CRF:-23}
+	CRF=${OPTS_CRF:-$DEFAULTS_OPTS_CRF}
 	export FF_STD="-preset myTranscoderPreset -crf $CRF -tune animation \
 		-preset medium -movflags +faststart"
 	export FF_EXT="-profile:v high -level 4.0"
@@ -629,6 +631,7 @@ while true; do
 
     -t <t>      ffmpeg encoding time limit
     --crf <#>   override CRF setting
+                    default: $DEFAULTS_OPTS_CRF
     --soft      force software decode and encode
     --psoft     use software encoding (allow hardware decode when available)
     --audiofix  transcode audio
