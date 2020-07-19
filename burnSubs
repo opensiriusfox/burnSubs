@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.11.3
+# version 0.12.0
 #################
 # Wishlist:
 #   queue encodes
@@ -428,17 +428,21 @@ function extractSubs() {
 function doTranscode() {
 	echo "=> Starting transcode:"
 	# shellcheck disable=SC2086
-	echo "$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
+	echo "$FFMPEG" ${FF_VERBOSITY} ${FF_HW} -i "${INPUT_VIDEO}" \
+		-sn ${LIM_TIME} \
 		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
-		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
+			${FILT_AUDIO} \
+		-c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
 		"${OUTPUT_VIDEO}"
 	if [[ "$OPTS_DRYRUN" == true ]]; then
 		return
 	fi
 	# shellcheck disable=SC2086
-	"$FFMPEG" ${FF_HW} -i "${INPUT_VIDEO}" -sn ${LIM_TIME} \
+	"$FFMPEG" ${FF_VERBOSITY} ${FF_HW} -i "${INPUT_VIDEO}" \
+		-sn ${LIM_TIME} \
 		-filter:v "${FILT_PFX}ass=${SUBTITLE_FILE}${FILT_SFX}" \
-		${FILT_AUDIO} -c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
+			${FILT_AUDIO} \
+		-c:v "${FF_ENC}" ${FF_STD} ${FF_EXT} ${FF_AUDIO}	\
 		"${OUTPUT_VIDEO}"
 	export FINAL_STATUS=$?
 }
@@ -496,6 +500,7 @@ OPTS_DEBUG=false
 OPTS_LPF_AUDIO=false
 OPTS_TRANS_AUDIO=false
 OPTS_derived_NO_OUTPUT=false
+OPTS_VERBOSITY=1
 unset OPT_CRF
 # this is the --icon flag passed to notify-send at the end of the transcode
 NOTIFY_ICON="face-tired"
@@ -515,7 +520,8 @@ FINAL_STATUS=1
 
 ######
 # Reformat and organize the input strings
-OPT_STRING=$(getopt -o 'hkls:a:dt:' --long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:' -- "$@")
+OPT_STRING=$(getopt -o 'hkls:a:dt:vq' \
+	--long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:,verbose,quiet' -- "$@")
 # reassign them as positional arguments
 eval set -- "$OPT_STRING"
 
@@ -616,6 +622,22 @@ while true; do
 			shift
 			continue
 		;;
+		"--verbose"|"-v")
+			if [[ ${OPTS_VERBOSITY} -ne 0 ]]; then
+				OPTS_VERBOSITY=2
+				echo ">> !! print ffmpeg header."
+			else
+				echo ">> !! Ignoring verbosity flag. Quiet takes precidence."
+			fi
+			shift
+			continue
+		;;
+		"--quiet"|"-q")
+			OPTS_VERBOSITY=0
+			echo ">> !! print ffmpeg header."
+			shift
+			continue
+		;;
 		"--")
 			shift # all arguments parsed
 			break
@@ -627,28 +649,30 @@ while true; do
 			#echo "TODO: HELP!" # Display HELP
 			cat << _EOT
   ----------------------------------------------------------------------------
-    -k          auto-klobber when ffmpeg asks
+    -k              auto-klobber when ffmpeg asks
 
-    -t <t>      ffmpeg encoding time limit
-    --crf <#>   override CRF setting
-                    default: $DEFAULTS_OPTS_CRF
-    --soft      force software decode and encode
-    --psoft     use software encoding (allow hardware decode when available)
-    --audiofix  transcode audio
-    --lpf     transcode audio, and low-pass filter as well
+    -t <t>          ffmpeg encoding time limit
+    --crf <#>       override CRF setting
+                        default: $DEFAULTS_OPTS_CRF
+    --soft          force software decode and encode
+    --psoft         use software encoding (allow hardware decode when available)
+    --audiofix      transcode audio
+    --lpf           transcode audio, and low-pass filter as well
 
-    -l          list subtitles and audio tracks (no encoding)
-    -s <#>      select specific subtitle track number
-                #TODO: verify legal subtitle track number convention
-    -a <#>      select specific audio track number
-                #TODO: verify legal audio track number convention
-    --slocale 'eng'     select specific subtitle track number
-                        #TODO: verify legal subtitle track number convention
-    --alocale 'jpn'     select specific audio track number
-                        #TODO: verify legal audio track number convention
+    -l              list subtitles and audio tracks (no encoding)
+    -s <#>          select specific subtitle track number
+                    #TODO: verify legal subtitle track number convention
+    -a <#>          select specific audio track number
+                    #TODO: verify legal audio track number convention
+    --slocale 'eng' select specific subtitle track number
+                    #TODO: verify legal subtitle track number convention
+    --alocale 'jpn' select specific audio track number
+                    #TODO: verify legal audio track number convention
 
-    -d          debug (no cleanup)
-    --dry       dry run (no encoding)
+    -d              debug (no cleanup)
+    --dry           dry run (no encoding)
+    -q, --quiet     make ffmpeg shutup
+    -v, --verbose   show all FFMPEG details (except that ruddy header)
 _EOT
 			exit
 		;;
@@ -674,6 +698,14 @@ else
 	exit
 fi
 
+# Actual verbosity parsing
+if [[ ${OPTS_VERBOSITY} -le 0 ]]; then
+	FF_VERBOSITY="-hide_banner -loglevel error"
+elif [[ ${OPTS_VERBOSITY} -eq 1 ]]; then
+	FF_VERBOSITY="-hide_banner -loglevel error -stats"
+else # ie [[ ${OPTS_VERBOSITY} -ge 2 ]]; then
+	FF_VERBOSITY="-hide_banner"
+fi
 ###############
 # Configure the encoder based upon the hostname
 machineSetup
