@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.13.0
+# version 0.13.1
 #################
 # Wishlist:
 #   queue encodes
@@ -57,7 +57,7 @@ function machineSetup() {
 			#export FFMPEG="/opt/ffmpeg-nvenc/bin/ffmpeg"
 			export LD_LIBRARY_PATH="/opt/ffmpeg-nvenc/lib"
 			export FF_EXT="${FF_EXT} -pix_fmt yuv420p"
-		elif [[ "$(hostname)" == "grad-heo-lappy" ]]; then
+		elif [[ "$(hostname)" == "random-vaapi-intel-laptop" ]]; then
 			echo "   > Hostname: $(hostname)"
 			export OPTS_ENC="vaapi"
 		else
