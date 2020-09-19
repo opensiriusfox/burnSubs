@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.13.2
+# version 0.13.3
 #################
 # Wishlist:
 #   queue encodes
@@ -13,8 +13,6 @@ set -o errexit
 #	finish help flag
 #	audio recode flag
 #
-# Changes
-#   automatically select JPN audio if more than one audio channel found.
 ################################################################################
 
 DEFAULTS_OPTS_CRF=20
@@ -175,6 +173,7 @@ function doCleanup() {
 		echo "=> Cleaning up."
 		rm -r "$TMP"
 	else
+		set +x
 		echo "tmp dir: $TMP"
 	fi
 	
@@ -314,7 +313,7 @@ function setupAudioTranscode() {
 		if [[ "${OPTS_SURROUND_PRESERVE}" == false ]]; then
 			# From https://superuser.com/questions/852400/properly-downmix-5-1-to-stereo-using-ffmpeg
 			# Nightmode Formula
-			FILT_AUDIO="-filter:a pan=stereo|FL<FC+0.30*FL+0.30*BL|FR<FC+0.30*FR+0.30*BR ${FILT_AUDIO}"
+			FILT_AUDIO="-filter:a pan=stereo|FL=FC+0.30*FL+0.30*BL|FR=FC+0.30*FR+0.30*BR ${FILT_AUDIO}"
 		fi
 	else
 		FILT_AUDIO="-c:a copy"
@@ -736,6 +735,11 @@ elif [[ ${OPTS_VERBOSITY} -eq 1 ]]; then
 else # ie [[ ${OPTS_VERBOSITY} -ge 2 ]]; then
 	FF_VERBOSITY="-hide_banner"
 fi
+
+if [[ "$OPTS_DEBUG" == "true" ]]; then
+	set -x
+fi
+
 ###############
 # Configure the encoder based upon the hostname
 machineSetup
