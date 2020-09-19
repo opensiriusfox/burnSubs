@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.13.1
+# version 0.13.2
 #################
 # Wishlist:
 #   queue encodes
@@ -139,9 +139,9 @@ function setupBins() {
 	setAndValidateBin "ffmpeg" "FFMPEG"
 	setAndValidateBin "ffprobe" "FFPROBE"
 	setAndValidateBin "jq" "JQ"
-	setAndValidateBin "python3" "PYTHON3"
-	setAndValidateBin "awk" "AWK"
-	setAndValidateBin "date" "DATE"
+	#setAndValidateBin "python3" "PYTHON3"
+	#setAndValidateBin "awk" "AWK"
+	#setAndValidateBin "date" "DATE"
 }
 
 # Used by the above function to evaluate overrides if they are set, and
