@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.12.0
+# version 0.13.0
 #################
 # Wishlist:
 #   queue encodes
@@ -65,20 +65,6 @@ function machineSetup() {
 			export OPTS_ENC="allsoft"
 			export FF_EXT="${FF_EXT} -pix_fmt yuv420p"
 		fi
-	fi
-	
-	# Configure audio filtergraph if needed.
-	if [[ "${OPTS_TRANS_AUDIO}" == true ]]; then
-		FILT_AUDIO="-c:a aac"
-		if [[ "${OPTS_LPF_AUDIO}" == true ]]; then
-			FILT_AUDIO="-filter:a highpass=f=7 ${FILT_AUDIO}"
-		fi
-
-		if [[ "$(hostname)" == "Ram-the-Red" ]]; then
-			FILT_AUDIO="${FILT_AUDIO} -strict -2"
-		fi
-	else
-		FILT_AUDIO="-c:a copy"
 	fi
 
 	# Configure the encoder based upon the specific encoder chain required
@@ -296,10 +282,45 @@ function parseStreams() {
 	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_name == "ass" or $item.codec_name == "dvd_subtitle") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition, codec:($item.codec_name)}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition,codec:$item.codec}])' "${STREAMS_ALL}" > "${STREAMS_SUB}"
 	export SUB_COUNT=$("$JQ" 'length' "${STREAMS_SUB}")
 	# shellcheck disable=SC2016
-	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_type == "audio") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition}])' "${STREAMS_ALL}" > "${STREAMS_AUDIO}"
+	"$JQ" 'reduce .streams[] as $item ([]; if ($item.codec_type == "audio") then [.[],$item] else . end) | reduce .[] as $item ([]; [.[],{t:($item.tags.title),i:($item.index),lang:$item.tags.language, disposition:$item.disposition, chan:{channels:$item.channels, channel_layout:$item.channel_layout}}]) | reduce .[] as $item ([]; [.[],{t:($item.t // ($item.lang + "-" + ($item.i | tostring))),i:$item.i,lang:$item.lang,disposition:$item.disposition, chan:$item.chan}])' "${STREAMS_ALL}" > "${STREAMS_AUDIO}"
 	export AUDIO_COUNT=$("$JQ" 'length' "${STREAMS_AUDIO}")
 	
 	
+}
+
+function setupAudioTranscode() {
+	if [[ $AUDIO_COUNT -ne 1 ]]; then
+		CHANNEL_COUNT=$($JQ '.[] | select(.i == '$AUDIO_INDEX') | .chan.channels' "$STREAMS_AUDIO")
+		CHANNEL_LAYOUT=$($JQ '.[] | select(.i == '$AUDIO_INDEX') | .chan.channel_layout' "$STREAMS_AUDIO")
+	else
+		CHANNEL_COUNT=$($JQ '.[] | .chan.channels' "$STREAMS_AUDIO")
+		CHANNEL_LAYOUT=$($JQ '.[] | .chan.channel_layout' "$STREAMS_AUDIO")
+	fi
+
+	if [[ "${CHANNEL_COUNT}" == "6" && "${CHANNEL_LAYOUT}" == '"5.1"' ]]; then
+		# check if we're 5.1 and if so flag transcode.
+		export OPTS_TRANS_AUDIO=true
+	elif [[ "${CHANNEL_COUNT}" != "2" && "${CHANNEL_LAYOUT}" != '"5.1"' ]]; then
+		echo "ERROR: Trying to enocde non 5.1 and non-stereo audio stream."
+		exit 1
+	fi
+	
+	# Configure audio filtergraph if needed.
+	if [[ "${OPTS_TRANS_AUDIO}" == true ]]; then
+		FILT_AUDIO="-c:a aac"
+		if [[ "${OPTS_LPF_AUDIO}" == true ]]; then
+			FILT_AUDIO="-filter:a highpass=f=7 ${FILT_AUDIO}"
+		fi
+		if [[ "${OPTS_SURROUND_PRESERVE}" == false ]]; then
+			# From https://superuser.com/questions/852400/properly-downmix-5-1-to-stereo-using-ffmpeg
+			# Nightmode Formula
+			FILT_AUDIO="-filter:a pan=stereo|FL<FC+0.30*FL+0.30*BL|FR<FC+0.30*FR+0.30*BR ${FILT_AUDIO}"
+		fi
+	else
+		FILT_AUDIO="-c:a copy"
+	fi
+
+
 }
 
 function listSubtitles() {
@@ -501,6 +522,7 @@ OPTS_LPF_AUDIO=false
 OPTS_TRANS_AUDIO=false
 OPTS_derived_NO_OUTPUT=false
 OPTS_VERBOSITY=1
+OPTS_SURROUND_PRESERVE=false
 unset OPT_CRF
 # this is the --icon flag passed to notify-send at the end of the transcode
 NOTIFY_ICON="face-tired"
@@ -521,7 +543,7 @@ FINAL_STATUS=1
 ######
 # Reformat and organize the input strings
 OPT_STRING=$(getopt -o 'hkls:a:dt:vq' \
-	--long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:,verbose,quiet' -- "$@")
+	--long 'help,psoft,soft,dry,crf:,audio,audiofix,alocale:,slocale:,verbose,quiet,keep-surround' -- "$@")
 # reassign them as positional arguments
 eval set -- "$OPT_STRING"
 
@@ -597,6 +619,13 @@ while true; do
 			shift
 			continue
 		;;
+		"--keep-surround")
+			OPTS_SURROUND_PRESERVE=true
+			OPTS_TRANS_AUDIO=true
+			echo ">> !! preserving 5.1/7.1 surround sound if available."
+			shift
+			continue
+		;;
 		"--soft")
 			OPTS_FORCESOFT=true
 			echo ">> !! forcing software decoding/encoding."
@@ -657,6 +686,7 @@ while true; do
     --soft          force software decode and encode
     --psoft         use software encoding (allow hardware decode when available)
     --audiofix      transcode audio
+	--keep-surround	try to preserve surround sound rather than downmixing to stereo.
     --lpf           transcode audio, and low-pass filter as well
 
     -l              list subtitles and audio tracks (no encoding)
@@ -734,6 +764,10 @@ fi
 selectSubs
 # extract the selected subtitle file
 extractSubs $SUBTITLE_INDEX
+
+# Configure the audio straem
+setupAudioTranscode
+
 # Set the bitrate if that function wasn't disabled
 runExtraProc "h264_vaapi"
 
