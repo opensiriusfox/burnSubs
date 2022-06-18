@@ -5,7 +5,7 @@ set -o errexit
 
 ################################################################################
 # burnSubs
-# version 0.13.2
+# version 0.13.3
 #################
 # Wishlist:
 #   queue encodes
@@ -386,9 +386,9 @@ function selectSubs() {
 				# try to avoid a signs and lyrics track
 				LANG_SINGLE_SELECT=$($JQ '[.[].lang] | index("'${OPTS_SELSUB_LANG}'")' "$STREAMS_SUB")
 				echo "Multiple english tracks found."
-				export SUBTITLE_INDEX=$($JQ 'reduce .[] as $trk ([]; if ($trk.lang == "'${OPTS_SELSUB_LANG}'" and ( ($trk.t | test("lyrics";"i") or ($trk.t | test("signs";"i")) ) | not ) ) then [.[],{t:$trk.t,i:$trk.i}] else . end) | .[].i' "$STREAMS_SUB")
+				export SUBTITLE_INDEX=$($JQ 'reduce .[] as $trk ([]; if ($trk.lang == "'${OPTS_SELSUB_LANG}'" and (( ($trk.t | test("lyrics";"i")) or ($trk.t | test("signs";"i")) or ($trk.t | test("dub";"i")) )|not) ) then [.[],{t:$trk.t,i:$trk.i}] else . end) | .[].i' "$STREAMS_SUB")
 				# And display rejected subtitles too.
-				SUBTITLE_REJECT_LIST=($($JQ 'reduce .[] as $trk ([]; if ($trk.lang == "'${OPTS_SELSUB_LANG}'" and ( ($trk.t | test("lyrics";"i") or ($trk.t | test("signs";"i")) ) ) ) then [.[],{t:$trk.t,i:$trk.i}] else . end) | .[].t' "$STREAMS_SUB"))
+				SUBTITLE_REJECT_LIST=($($JQ 'reduce .[] as $trk ([]; if ($trk.lang == "'${OPTS_SELSUB_LANG}'" and (( ($trk.t | test("lyrics";"i")) or ($trk.t | test("signs";"i")) or ($trk.t | test("dub";"i")) )) ) techo hen [.[],{t:$trk.t,i:$trk.i}] else . end) | .[].t' "$STREAMS_SUB"))
 				for REJECT_SUB in ${SUBTITLE_REJECT_LIST[@]}; do
 					echo "       > rejecting ${REJECT_SUB}"
 				done
