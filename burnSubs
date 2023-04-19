@@ -15,7 +15,7 @@ set -o errexit
 #
 ################################################################################
 
-DEFAULTS_OPTS_CRF=20
+DEFAULTS_OPTS_CRF=18
 
 function machineSetup() {
 	# Default setup
